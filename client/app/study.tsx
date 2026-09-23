@@ -1,6 +1,18 @@
 import { Link, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import {
+  AccessibilityInfo,
+  Animated,
+  Easing,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppHeader } from "@/components/AppHeader";
 import { StatePanel } from "@/components/StatePanel";
 import { api, type CardReview, type Deck, type Learner, type PendingReview, type StudyCard } from "@/api";
@@ -31,7 +43,10 @@ function nextLabel(value: string | null) {
 export default function Study() {
   const params = useLocalSearchParams<{ subjectId?: string; topicId?: string }>();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const desktop = width >= 920;
+  const compact = width < 600;
+
   const [phase, setPhase] = useState<Phase>("loading");
   const [decks, setDecks] = useState<Deck[]>([]);
   const [selectedDeck, setSelectedDeck] = useState<Deck | null>(null);
@@ -39,7 +54,7 @@ export default function Study() {
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-  const revealMotion = useRef(new Animated.Value(0)).current;
+  const [deckPickerOpen, setDeckPickerOpen] = useState(false);
   const [offline, setOffline] = useState(false);
   const [pending, setPending] = useState(0);
   const [learner, setLearner] = useState<Learner | null>(null);
@@ -50,6 +65,9 @@ export default function Study() {
     cardIndex: number;
     rating: CardReview["rating"];
   } | null>(null);
+
+  const revealMotion = useRef(new Animated.Value(0)).current;
+  const cardMotion = useRef(new Animated.Value(1)).current;
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const card = cards[index] ?? null;
@@ -67,39 +85,63 @@ export default function Study() {
     revealMotion.stopAnimation();
     Animated.timing(revealMotion, {
       toValue: revealed ? 1 : 0,
-      duration: reduceMotion ? 0 : 280,
+      duration: reduceMotion ? 0 : 260,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
   }, [revealed, reduceMotion, revealMotion]);
 
+  useEffect(() => {
+    if (phase !== "ready" || !card) return;
+    cardMotion.stopAnimation();
+    if (reduceMotion) {
+      cardMotion.setValue(1);
+      return;
+    }
+    cardMotion.setValue(0);
+    Animated.timing(cardMotion, {
+      toValue: 1,
+      duration: 180,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [card?.id, phase, reduceMotion, cardMotion]);
+
   const animatedCardBackground = revealMotion.interpolate({
-    inputRange: [0, 0.55, 1],
+    inputRange: [0, 0.52, 1],
     outputRange: [colors.ink, colors.ink2, colors.lime],
   });
   const animatedCardScale = revealMotion.interpolate({
     inputRange: [0, 0.5, 1],
-    outputRange: [1, 0.985, 1],
+    outputRange: [1, 0.988, 1],
   });
   const animatedCardTilt = revealMotion.interpolate({
     inputRange: [0, 0.5, 1],
-    outputRange: ["0deg", "-1.25deg", "0deg"],
+    outputRange: ["0deg", "-1deg", "0deg"],
   });
   const frontOpacity = revealMotion.interpolate({
-    inputRange: [0, 0.42, 0.5, 1],
+    inputRange: [0, 0.43, 0.51, 1],
     outputRange: [1, 1, 0, 0],
   });
   const frontTranslate = revealMotion.interpolate({
-    inputRange: [0, 0.42, 1],
-    outputRange: [0, 0, -14],
+    inputRange: [0, 0.43, 1],
+    outputRange: [0, 0, -12],
   });
   const backOpacity = revealMotion.interpolate({
-    inputRange: [0, 0.5, 0.58, 1],
+    inputRange: [0, 0.5, 0.59, 1],
     outputRange: [0, 0, 1, 1],
   });
   const backTranslate = revealMotion.interpolate({
     inputRange: [0, 0.58, 1],
-    outputRange: [14, 8, 0],
+    outputRange: [12, 7, 0],
+  });
+  const cardOpacity = cardMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
+  const cardTranslate = cardMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 0],
   });
 
   async function refreshPending() {
@@ -154,6 +196,7 @@ export default function Study() {
 
   async function openDeck(deck: Deck, topicId?: string) {
     setSelectedDeck(deck);
+    setDeckPickerOpen(false);
     setIndex(0);
     setReviewed(0);
     setRepeated(0);
@@ -246,73 +289,109 @@ export default function Study() {
   const nextDeck = decks.find((item) => item.subjectId !== selectedDeck?.subjectId && item.due + item.newCount > 0) ?? null;
   const nextReview = nextLabel(selectedDeck?.nextDueAt ?? null);
 
+  const deckButton = (deck: Deck, mobile = false) => {
+    const active = selectedDeck?.subjectId === deck.subjectId;
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        key={deck.subjectId}
+        onPress={() => void openDeck(deck)}
+        style={({ pressed }) => [
+          mobile ? styles.mobileDeckItem : styles.deckButton,
+          active && (mobile ? styles.mobileDeckItemActive : styles.deckButtonActive),
+          pressed && styles.pressed,
+        ]}
+      >
+        <View style={mobile ? styles.mobileDeckItemTop : styles.deckButtonTop}>
+          <Text style={[styles.deckCode, active && styles.deckCodeActive]}>{deck.unitCode}</Text>
+          <Text style={[styles.deckDue, active && styles.deckDueActive]}>{deckStatus(deck)}</Text>
+        </View>
+        {!mobile ? <Text numberOfLines={2} style={[styles.deckName, active && styles.deckNameActive]}>{deck.name}</Text> : null}
+      </Pressable>
+    );
+  };
+
   return (
     <View style={styles.page}>
       <AppHeader />
-      <ScrollView
-        style={styles.bodyScroll}
-        contentContainerStyle={[styles.body, desktop && styles.bodyDesktop]}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={[styles.deckRail, desktop && styles.deckRailDesktop]}>
-          <View style={styles.railHead}>
-            <Text style={styles.railLabel}>CARDS</Text>
-            <Text style={styles.railTotal}>{dueTotal}</Text>
-          </View>
-          <ScrollView
-            horizontal={!desktop}
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={[styles.deckList, !desktop && styles.deckListMobile]}
-          >
-            {decks.map((deck) => {
-              const active = selectedDeck?.subjectId === deck.subjectId;
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  key={deck.subjectId}
-                  onPress={() => void openDeck(deck)}
-                  style={({ pressed }) => [
-                    styles.deckButton,
-                    desktop && styles.deckButtonDesktop,
-                    active && styles.deckButtonActive,
-                    desktop && active && styles.deckButtonActiveDesktop,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <View style={styles.deckButtonTop}>
-                    <Text style={[styles.deckCode, active && styles.deckCodeActive, desktop && active && styles.deckCodeActiveDesktop]}>{deck.unitCode}</Text>
-                    <Text style={[styles.deckDue, active && styles.deckDueActive, desktop && active && styles.deckDueActiveDesktop]}>{deckStatus(deck)}</Text>
-                  </View>
-                  <Text numberOfLines={2} style={[styles.deckName, active && styles.deckNameActive, desktop && active && styles.deckNameActiveDesktop]}>{deck.name}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
 
-        <View style={styles.stage}>
-          <View style={styles.stageTop}>
-            <View style={styles.stageIdentity}>
-              <Text style={styles.unitCode}>{selectedDeck?.unitCode ?? "ATP"}</Text>
-              <Text style={styles.stageTitle}>{selectedDeck?.name ?? "Cards"}</Text>
+      <View
+        style={[
+          styles.body,
+          desktop && styles.bodyDesktop,
+          !desktop && { paddingBottom: Math.max(insets.bottom, 10) + 76 },
+        ]}
+      >
+        {desktop ? (
+          <View style={styles.deckRailDesktop}>
+            <View style={styles.railHead}>
+              <Text style={styles.railLabel}>CARDS</Text>
+              <Text style={styles.railTotal}>{dueTotal}</Text>
             </View>
-            {phase === "ready" ? (
-              <View style={styles.counterWrap}>
-                <Text style={styles.counter}>{remaining}</Text>
-                <Text style={styles.counterLabel}>LEFT</Text>
+            <ScrollView
+              style={styles.deckRailScroll}
+              contentContainerStyle={styles.deckListDesktop}
+              showsVerticalScrollIndicator={false}
+            >
+              {decks.map((deck) => deckButton(deck))}
+            </ScrollView>
+          </View>
+        ) : (
+          <View style={styles.mobileDeckShell}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: deckPickerOpen }}
+              onPress={() => setDeckPickerOpen((value) => !value)}
+              style={({ pressed }) => [styles.mobileDeckCurrent, pressed && styles.pressed]}
+            >
+              <View style={styles.mobileDeckIdentity}>
+                <Text style={styles.mobileDeckCode}>{selectedDeck?.unitCode ?? "ATP"}</Text>
+                <Text numberOfLines={1} style={styles.mobileDeckName}>{selectedDeck?.name ?? "Cards"}</Text>
               </View>
+              <View style={styles.mobileDeckRight}>
+                <Text style={styles.mobileDeckStatus}>{selectedDeck ? deckStatus(selectedDeck) : ""}</Text>
+                <Text style={styles.mobileDeckChevron}>{deckPickerOpen ? "↑" : "↓"}</Text>
+              </View>
+            </Pressable>
+
+            {deckPickerOpen ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.mobileDeckPicker}
+              >
+                {decks.map((deck) => deckButton(deck, true))}
+              </ScrollView>
             ) : null}
           </View>
+        )}
 
-          {offline || (pending > 0 && !lastQueued) ? (
-            <View style={styles.syncBar}>
-              <View style={[styles.syncDot, offline && styles.syncDotOffline]} />
-              <Text style={styles.syncText}>
-                {offline ? "Offline" : `${pending} pending`}
+        <View style={styles.stage}>
+          <View style={[styles.stageTop, compact && styles.stageTopCompact]}>
+            <View style={styles.stageIdentity}>
+              {desktop ? <Text style={styles.unitCode}>{selectedDeck?.unitCode ?? "ATP"}</Text> : null}
+              <Text numberOfLines={1} style={[styles.stageTitle, compact && styles.stageTitleCompact]}>
+                {selectedDeck?.name ?? "Cards"}
               </Text>
             </View>
-          ) : null}
+
+            <View style={styles.stageRight}>
+              {offline || (pending > 0 && !lastQueued) ? (
+                <View style={styles.syncInline}>
+                  <View style={[styles.syncDot, offline && styles.syncDotOffline]} />
+                  <Text style={styles.syncText}>{offline ? "Offline" : `${pending} pending`}</Text>
+                </View>
+              ) : null}
+
+              {phase === "ready" ? (
+                <View style={styles.counterWrap}>
+                  <Text style={styles.counter}>{remaining}</Text>
+                  <Text style={styles.counterLabel}>LEFT</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
 
           {phase === "ready" ? (
             <View style={styles.progressTrack}>
@@ -320,77 +399,16 @@ export default function Study() {
             </View>
           ) : null}
 
-          {phase === "loading" ? (
-            <StatePanel title="Loading…" />
-          ) : phase === "error" ? (
-            <StatePanel title="Could not load this deck." action="Try again" onPress={() => selectedDeck ? void openDeck(selectedDeck) : void loadDecks()} />
-          ) : phase === "empty" ? (
-            <View style={styles.completePanel}>
-              <Text style={styles.completeKicker}>{selectedDeck?.unitCode}</Text>
-              <Text style={styles.completeTitle}>{selectedDeck?.total ? "Clear for now" : "No cards yet"}</Text>
-              {nextReview ? <Text style={styles.completeMeta}>Next review · {nextReview}</Text> : null}
-              {nextDeck ? (
-                <Pressable onPress={() => void openDeck(nextDeck)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-                  <Text style={styles.primaryText}>{nextDeck.unitCode}</Text>
-                  <Text style={styles.primaryArrow}>→</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : phase === "complete" ? (
-            <View style={styles.completePanel}>
-              <Text style={styles.completeKicker}>{selectedDeck?.unitCode}</Text>
-              <Text style={styles.completeTitle}>Session complete</Text>
-              <View style={styles.sessionStats}>
-                <View>
-                  <Text style={styles.statNumber}>{reviewed}</Text>
-                  <Text style={styles.statLabel}>Reviewed</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View>
-                  <Text style={styles.statNumber}>{repeated}</Text>
-                  <Text style={styles.statLabel}>Again</Text>
-                </View>
-              </View>
-              {pending > 0 && !lastQueued
-                ? <Text style={styles.completeMeta}>{pending} review{pending === 1 ? "" : "s"} will sync when connected</Text>
-                : nextReview
-                  ? <Text style={styles.completeMeta}>Next review · {nextReview}</Text>
-                  : null}
-              {lastQueued ? (
-                <View style={styles.undoBar}>
-                  <Text style={styles.undoText}>Saved as {lastQueued.rating}</Text>
-                  <Pressable onPress={() => void undoLast()}><Text style={styles.undoAction}>Undo</Text></Pressable>
-                </View>
-              ) : null}
-              <View style={styles.completeActions}>
-                {nextDeck ? (
-                  <Pressable onPress={() => void openDeck(nextDeck)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-                    <Text style={styles.primaryText}>Continue · {nextDeck.unitCode}</Text>
-                    <Text style={styles.primaryArrow}>→</Text>
-                  </Pressable>
-                ) : (
-                  <Link href="/" asChild>
-                    <Pressable style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-                      <Text style={styles.primaryText}>Today</Text>
-                    </Pressable>
-                  </Link>
-                )}
-                {learner?.kind === "guest" ? (
-                  <Link href={{ pathname: "/account", params: { mode: "register" } }} asChild>
-                    <Pressable style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>
-                      <Text style={styles.secondaryText}>Save progress</Text>
-                    </Pressable>
-                  </Link>
-                ) : null}
-              </View>
-            </View>
-          ) : card ? (
-            <>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={revealed ? "Answer shown" : "Reveal answer"}
-                onPress={() => setRevealed((value) => !value)}
-                style={({ pressed }) => [styles.cardHit, pressed && styles.cardPressed]}
+          {phase === "ready" && card ? (
+            <View style={styles.studyWorkspace}>
+              <Animated.View
+                style={[
+                  styles.cardShell,
+                  {
+                    opacity: cardOpacity,
+                    transform: [{ translateY: cardTranslate }],
+                  },
+                ]}
               >
                 <Animated.View
                   style={[
@@ -406,7 +424,7 @@ export default function Study() {
                   ]}
                 >
                   <Animated.View
-                    pointerEvents="none"
+                    pointerEvents={revealed ? "none" : "auto"}
                     style={[
                       styles.cardFace,
                       {
@@ -415,18 +433,27 @@ export default function Study() {
                       },
                     ]}
                   >
-                    <View style={styles.cardHeader}>
-                      <Text style={styles.cardLabel}>RECALL</Text>
-                      <Text style={styles.cardPosition}>{String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}</Text>
-                    </View>
-                    <View style={styles.cardBody}>
-                      <Text style={styles.topic}>{card.topicName}</Text>
-                      <Text style={styles.cardText}>{card.front}</Text>
-                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Reveal answer"
+                      onPress={() => setRevealed(true)}
+                      style={({ pressed }) => [styles.frontPress, pressed && styles.cardPressed]}
+                    >
+                      <View style={styles.cardHeader}>
+                        <Text style={styles.cardLabel}>RECALL</Text>
+                        <Text style={styles.cardPosition}>
+                          {String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}
+                        </Text>
+                      </View>
+                      <View style={styles.cardContent}>
+                        <Text style={styles.topic}>{card.topicName}</Text>
+                        <Text style={[styles.cardText, compact && styles.cardTextCompact]}>{card.front}</Text>
+                      </View>
+                    </Pressable>
                   </Animated.View>
 
                   <Animated.View
-                    pointerEvents="none"
+                    pointerEvents={revealed ? "auto" : "none"}
                     style={[
                       styles.cardFace,
                       {
@@ -435,134 +462,399 @@ export default function Study() {
                       },
                     ]}
                   >
-                    <View style={styles.cardHeader}>
-                      <Text style={[styles.cardLabel, styles.cardLabelDark]}>ANSWER</Text>
-                      <Text style={[styles.cardPosition, styles.cardLabelDark]}>{String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}</Text>
-                    </View>
-                    <View style={styles.cardBody}>
-                      <Text style={[styles.topic, styles.topicDark]}>{card.topicName}</Text>
-                      <Text style={[styles.cardText, styles.cardTextDark]}>{card.back}</Text>
-                      {card.source ? <Text style={styles.source}>{card.source}</Text> : null}
+                    <View style={styles.answerFace}>
+                      <View style={styles.cardHeader}>
+                        <Text style={[styles.cardLabel, styles.cardLabelDark]}>ANSWER</Text>
+                        <Text style={[styles.cardPosition, styles.cardLabelDark]}>
+                          {String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}
+                        </Text>
+                      </View>
+                      <ScrollView
+                        style={styles.answerScroll}
+                        contentContainerStyle={styles.answerContent}
+                        showsVerticalScrollIndicator={false}
+                        nestedScrollEnabled
+                      >
+                        <Text style={[styles.topic, styles.topicDark]}>{card.topicName}</Text>
+                        <Text style={[styles.cardText, styles.cardTextDark, compact && styles.cardTextCompact]}>{card.back}</Text>
+                        {card.source ? <Text style={styles.source}>{card.source}</Text> : null}
+                      </ScrollView>
                     </View>
                   </Animated.View>
                 </Animated.View>
-              </Pressable>
+              </Animated.View>
 
-              {!revealed ? (
-                <Pressable onPress={() => setRevealed(true)} style={({ pressed }) => [styles.reveal, pressed && styles.pressed]}>
-                  <Text style={styles.revealText}>Reveal answer</Text>
-                </Pressable>
-              ) : (
-                <View style={styles.ratingGrid}>
-                  {(["again", "hard", "good", "easy"] as const).map((rating, ratingIndex) => (
-                    <Pressable
-                      key={rating}
-                      onPress={() => void rate(rating)}
-                      style={({ pressed }) => [styles.rateButton, rating === "again" && styles.rateAgain, pressed && styles.ratePressed]}
-                    >
-                      {Platform.OS === "web" ? <Text style={[styles.rateKey, rating === "again" && styles.rateAgainText]}>{ratingIndex + 1}</Text> : null}
-                      <Text style={[styles.rateName, rating === "again" && styles.rateAgainText]}>{rating[0].toUpperCase() + rating.slice(1)}</Text>
+              <View style={styles.controls}>
+                {!revealed ? (
+                  <Pressable
+                    onPress={() => setRevealed(true)}
+                    style={({ pressed }) => [styles.reveal, pressed && styles.controlPressed]}
+                  >
+                    <Text style={styles.revealText}>Reveal answer</Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.ratingGrid}>
+                    {(["again", "hard", "good", "easy"] as const).map((rating, ratingIndex) => (
+                      <Pressable
+                        key={rating}
+                        onPress={() => void rate(rating)}
+                        style={({ pressed }) => [
+                          styles.rateButton,
+                          rating === "again" && styles.rateAgain,
+                          pressed && styles.controlPressed,
+                        ]}
+                      >
+                        {Platform.OS === "web" ? (
+                          <Text style={[styles.rateKey, rating === "again" && styles.rateAgainText]}>
+                            {ratingIndex + 1}
+                          </Text>
+                        ) : null}
+                        <Text style={[styles.rateName, rating === "again" && styles.rateAgainText]}>
+                          {rating[0].toUpperCase() + rating.slice(1)}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.feedbackSlot}>
+                {lastQueued ? (
+                  <View style={styles.undoInline}>
+                    <Text style={styles.undoText}>Saved as {lastQueued.rating}</Text>
+                    <Pressable hitSlop={8} onPress={() => void undoLast()}>
+                      <Text style={styles.undoAction}>Undo</Text>
                     </Pressable>
-                  ))}
+                  </View>
+                ) : Platform.OS === "web" ? (
+                  <Text style={styles.keyboard}>Space · 1 · 2 · 3 · 4</Text>
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <ScrollView
+              style={styles.stateScroll}
+              contentContainerStyle={styles.stateScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {phase === "loading" ? (
+                <StatePanel title="Loading…" />
+              ) : phase === "error" ? (
+                <StatePanel
+                  title="Could not load this deck."
+                  action="Try again"
+                  onPress={() => selectedDeck ? void openDeck(selectedDeck) : void loadDecks()}
+                />
+              ) : phase === "empty" ? (
+                <View style={styles.completePanel}>
+                  <Text style={styles.completeKicker}>{selectedDeck?.unitCode}</Text>
+                  <Text style={styles.completeTitle}>{selectedDeck?.total ? "Clear for now" : "No cards yet"}</Text>
+                  {nextReview ? <Text style={styles.completeMeta}>Next review · {nextReview}</Text> : null}
+                  {nextDeck ? (
+                    <Pressable onPress={() => void openDeck(nextDeck)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
+                      <Text style={styles.primaryText}>{nextDeck.unitCode}</Text>
+                      <Text style={styles.primaryArrow}>→</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
-              )}
-
-              {lastQueued ? (
-                <View style={styles.undoBar}>
-                  <Text style={styles.undoText}>Saved as {lastQueued.rating}</Text>
-                  <Pressable onPress={() => void undoLast()}><Text style={styles.undoAction}>Undo</Text></Pressable>
+              ) : phase === "complete" ? (
+                <View style={styles.completePanel}>
+                  <Text style={styles.completeKicker}>{selectedDeck?.unitCode}</Text>
+                  <Text style={styles.completeTitle}>Session complete</Text>
+                  <View style={styles.sessionStats}>
+                    <View>
+                      <Text style={styles.statNumber}>{reviewed}</Text>
+                      <Text style={styles.statLabel}>Reviewed</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View>
+                      <Text style={styles.statNumber}>{repeated}</Text>
+                      <Text style={styles.statLabel}>Again</Text>
+                    </View>
+                  </View>
+                  {pending > 0 && !lastQueued
+                    ? <Text style={styles.completeMeta}>{pending} review{pending === 1 ? "" : "s"} will sync when connected</Text>
+                    : nextReview
+                      ? <Text style={styles.completeMeta}>Next review · {nextReview}</Text>
+                      : null}
+                  {lastQueued ? (
+                    <View style={styles.undoInline}>
+                      <Text style={styles.undoText}>Saved as {lastQueued.rating}</Text>
+                      <Pressable hitSlop={8} onPress={() => void undoLast()}>
+                        <Text style={styles.undoAction}>Undo</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                  <View style={styles.completeActions}>
+                    {nextDeck ? (
+                      <Pressable onPress={() => void openDeck(nextDeck)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
+                        <Text style={styles.primaryText}>Continue · {nextDeck.unitCode}</Text>
+                        <Text style={styles.primaryArrow}>→</Text>
+                      </Pressable>
+                    ) : (
+                      <Link href="/" asChild>
+                        <Pressable style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
+                          <Text style={styles.primaryText}>Today</Text>
+                        </Pressable>
+                      </Link>
+                    )}
+                    {learner?.kind === "guest" ? (
+                      <Link href={{ pathname: "/account", params: { mode: "register" } }} asChild>
+                        <Pressable style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>
+                          <Text style={styles.secondaryText}>Save progress</Text>
+                        </Pressable>
+                      </Link>
+                    ) : null}
+                  </View>
                 </View>
               ) : null}
-
-              {Platform.OS === "web" ? <Text style={styles.keyboard}>Space · 1 · 2 · 3 · 4</Text> : null}
-            </>
-          ) : null}
+            </ScrollView>
+          )}
         </View>
-      </ScrollView>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: colors.paper },
-  bodyScroll: { flex: 1 },
-  body: { flexGrow: 1, width: "100%", maxWidth: 1320, alignSelf: "center", padding: 16, paddingBottom: 104, gap: 16 },
-  bodyDesktop: { flexDirection: "row", padding: 28, gap: 22 },
-  deckRail: { gap: 12 },
-  deckRailDesktop: { width: 252, flexShrink: 0, paddingRight: 18, borderRightWidth: 1, borderRightColor: colors.line },
-  railHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 },
+  body: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 1440,
+    alignSelf: "center",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 8,
+    minHeight: 0,
+  },
+  bodyDesktop: {
+    flexDirection: "row",
+    paddingHorizontal: 24,
+    paddingTop: 18,
+    paddingBottom: 20,
+    gap: 24,
+  },
+
+  pressed: { opacity: 0.66 },
+  controlPressed: { transform: [{ scale: 0.985 }], opacity: 0.82 },
+
+  deckRailDesktop: {
+    width: 244,
+    flexShrink: 0,
+    minHeight: 0,
+    paddingRight: 18,
+    borderRightWidth: 1,
+    borderRightColor: colors.line,
+  },
+  deckRailScroll: { flex: 1, minHeight: 0 },
+  deckListDesktop: { paddingBottom: 18 },
+  railHead: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 5,
+    marginBottom: 2,
+  },
   railLabel: { color: colors.muted, fontSize: 10, fontWeight: "900", letterSpacing: 1.3 },
   railTotal: { color: colors.ink, fontSize: 11, fontWeight: "900" },
-  deckList: { gap: 7 },
-  deckListMobile: { paddingRight: 16 },
-  deckButton: { minWidth: 210, padding: 14, borderRadius: radii.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
-  deckButtonDesktop: { minWidth: 0, paddingHorizontal: 4, paddingVertical: 13, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderBottomColor: colors.line, backgroundColor: "transparent" },
-  deckButtonActive: { backgroundColor: colors.ink, borderColor: colors.ink },
-  deckButtonActiveDesktop: { backgroundColor: "transparent", borderColor: colors.line, borderLeftWidth: 3, borderLeftColor: colors.coral, paddingLeft: 11 },
+  deckButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+    borderLeftWidth: 3,
+    borderLeftColor: "transparent",
+    backgroundColor: "transparent",
+  },
+  deckButtonActive: { borderLeftColor: colors.coral, paddingLeft: 14 },
   deckButtonTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   deckCode: { color: colors.coral, fontSize: 9, fontWeight: "900", letterSpacing: 1 },
-  deckCodeActive: { color: colors.lime },
-  deckCodeActiveDesktop: { color: colors.coral },
+  deckCodeActive: { color: colors.ink },
   deckDue: { color: colors.muted, fontSize: 9, fontWeight: "800" },
-  deckDueActive: { color: "#AFC0BA" },
-  deckDueActiveDesktop: { color: colors.ink2 },
-  deckName: { color: colors.ink, fontSize: 14, lineHeight: 18, fontWeight: "800", marginTop: 7 },
-  deckNameActive: { color: "#fff" },
-  deckNameActiveDesktop: { color: colors.ink },
-  pressed: { opacity: 0.66 },
-  stage: { flex: 1, minWidth: 0, maxWidth: 800, alignSelf: "center", width: "100%" },
-  stageTop: { minHeight: 68, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14 },
-  stageIdentity: { flex: 1 },
+  deckDueActive: { color: colors.ink2 },
+  deckName: { color: colors.ink2, fontSize: 13, lineHeight: 17, fontWeight: "700", marginTop: 5 },
+  deckNameActive: { color: colors.ink, fontWeight: "900" },
+
+  mobileDeckShell: { flexShrink: 0, borderBottomWidth: 1, borderBottomColor: colors.line },
+  mobileDeckCurrent: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 3,
+  },
+  mobileDeckIdentity: { minWidth: 0, flex: 1, flexDirection: "row", alignItems: "center", gap: 9 },
+  mobileDeckCode: { color: colors.coral, fontSize: 9, fontWeight: "900", letterSpacing: 1 },
+  mobileDeckName: { minWidth: 0, flex: 1, color: colors.ink, fontSize: 13, fontWeight: "800" },
+  mobileDeckRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  mobileDeckStatus: { color: colors.muted, fontSize: 9, fontWeight: "800" },
+  mobileDeckChevron: { color: colors.ink, fontSize: 13, fontWeight: "900" },
+  mobileDeckPicker: { gap: 4, paddingBottom: 8, paddingRight: 8 },
+  mobileDeckItem: {
+    minWidth: 78,
+    minHeight: 42,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+    justifyContent: "center",
+  },
+  mobileDeckItemActive: { borderBottomColor: colors.coral },
+  mobileDeckItemTop: { gap: 2 },
+
+  stage: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    maxWidth: 900,
+    width: "100%",
+    alignSelf: "center",
+  },
+  stageTop: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 14,
+  },
+  stageTopCompact: { minHeight: 44 },
+  stageIdentity: { flex: 1, minWidth: 0 },
   unitCode: { color: colors.coral, fontSize: 9, fontWeight: "900", letterSpacing: 1.2 },
-  stageTitle: { color: colors.ink, fontSize: 24, lineHeight: 28, fontWeight: "900", letterSpacing: -0.8, marginTop: 3 },
+  stageTitle: { color: colors.ink, fontSize: 22, lineHeight: 27, fontWeight: "900", letterSpacing: -0.7, marginTop: 2 },
+  stageTitleCompact: { fontSize: 18, lineHeight: 22, marginTop: 0 },
+  stageRight: { flexDirection: "row", alignItems: "center", gap: 14 },
   counterWrap: { alignItems: "flex-end" },
-  counter: { color: colors.ink, fontSize: 20, fontWeight: "900" },
-  counterLabel: { color: colors.muted, fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
-  syncBar: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 5 },
+  counter: { color: colors.ink, fontSize: 18, lineHeight: 20, fontWeight: "900" },
+  counterLabel: { color: colors.muted, fontSize: 7, fontWeight: "900", letterSpacing: 1.1 },
+  syncInline: { flexDirection: "row", alignItems: "center", gap: 5 },
   syncDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.coral },
   syncDotOffline: { backgroundColor: colors.muted },
-  syncText: { color: colors.muted, fontSize: 10, fontWeight: "800" },
-  progressTrack: { height: 3, backgroundColor: colors.line, borderRadius: 2, marginBottom: 18, overflow: "hidden" },
+  syncText: { color: colors.muted, fontSize: 9, fontWeight: "800" },
+  progressTrack: {
+    height: 3,
+    backgroundColor: colors.line,
+    borderRadius: 2,
+    marginBottom: 9,
+    overflow: "hidden",
+  },
   progressFill: { height: 3, backgroundColor: colors.coral },
-  cardHit: { minHeight: 410, borderRadius: radii.lg },
-  card: { minHeight: 410, borderRadius: radii.lg, overflow: "hidden", ...shadow },
-  cardFace: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, padding: 28, justifyContent: "space-between" },
+
+  studyWorkspace: { flex: 1, minHeight: 0 },
+  cardShell: { flex: 1, minHeight: 0, borderRadius: radii.lg },
+  card: { flex: 1, minHeight: 0, borderRadius: radii.lg, overflow: "hidden", ...shadow },
+  cardFace: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
+  frontPress: { flex: 1, padding: 24 },
+  answerFace: { flex: 1, paddingTop: 24, paddingHorizontal: 24 },
   cardPressed: { opacity: 0.96 },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   cardLabel: { color: colors.lime, fontSize: 9, fontWeight: "900", letterSpacing: 1.4 },
   cardLabelDark: { color: colors.ink2 },
   cardPosition: { color: "#8BA19B", fontSize: 9, fontWeight: "900" },
-  cardBody: { flex: 1, justifyContent: "center", paddingVertical: 38 },
+  cardContent: { flex: 1, justifyContent: "center", paddingVertical: 24 },
+  answerScroll: { flex: 1, minHeight: 0, marginTop: 4 },
+  answerContent: { flexGrow: 1, justifyContent: "center", paddingVertical: 24, paddingBottom: 30 },
   topic: { color: "#9EB2AC", fontSize: 10, lineHeight: 14, fontWeight: "800" },
   topicDark: { color: colors.ink2 },
-  cardText: { color: "#fff", fontSize: 29, lineHeight: 37, fontWeight: "800", letterSpacing: -0.7, marginTop: 10 },
+  cardText: {
+    color: "#fff",
+    fontSize: 28,
+    lineHeight: 36,
+    fontWeight: "800",
+    letterSpacing: -0.65,
+    marginTop: 10,
+  },
+  cardTextCompact: { fontSize: 24, lineHeight: 31, letterSpacing: -0.45 },
   cardTextDark: { color: colors.ink },
-  source: { color: colors.ink2, fontSize: 11, lineHeight: 17, fontWeight: "700", marginTop: 22, paddingTop: 14, borderTopWidth: 1, borderTopColor: "rgba(16,45,42,.14)" },
-  reveal: { minHeight: 50, marginTop: 10, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
-  revealText: { color: colors.ink, fontSize: 12, fontWeight: "900" },
-  ratingGrid: { flexDirection: "row", gap: 7, marginTop: 10 },
-  rateButton: { flex: 1, minHeight: 58, paddingHorizontal: 8, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: "center", justifyContent: "center", gap: 2 },
+  source: {
+    color: colors.ink2,
+    fontSize: 11,
+    lineHeight: 17,
+    fontWeight: "700",
+    marginTop: 20,
+    paddingTop: 13,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(16,45,42,.14)",
+  },
+
+  controls: { flexShrink: 0, minHeight: 58, justifyContent: "center", marginTop: 8 },
+  reveal: {
+    minHeight: 54,
+    borderRadius: radii.sm,
+    backgroundColor: colors.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  revealText: { color: "#fff", fontSize: 12, fontWeight: "900" },
+  ratingGrid: { flexDirection: "row", gap: 6 },
+  rateButton: {
+    flex: 1,
+    minHeight: 54,
+    paddingHorizontal: 6,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
+  },
   rateAgain: { borderColor: "#E8B9AF", backgroundColor: "#FFF5F2" },
-  ratePressed: { transform: [{ scale: 0.98 }] },
   rateKey: { color: colors.muted, fontSize: 8, fontWeight: "800" },
   rateName: { color: colors.ink, fontSize: 11, fontWeight: "900" },
   rateAgainText: { color: colors.danger },
-  undoBar: { minHeight: 42, marginTop: 8, paddingHorizontal: 12, borderRadius: radii.sm, backgroundColor: colors.cream, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  undoText: { color: colors.ink2, fontSize: 10, fontWeight: "700", textTransform: "capitalize" },
-  undoAction: { color: colors.ink, fontSize: 11, fontWeight: "900" },
-  keyboard: { color: colors.muted, fontSize: 9, fontWeight: "700", textAlign: "center", marginTop: 10 },
-  completePanel: { minHeight: 400, paddingVertical: 44, borderTopWidth: 1, borderTopColor: colors.line, justifyContent: "center" },
+
+  feedbackSlot: {
+    minHeight: 30,
+    flexShrink: 0,
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  undoInline: {
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  undoText: { color: colors.muted, fontSize: 10, fontWeight: "700", textTransform: "capitalize" },
+  undoAction: { color: colors.ink, fontSize: 10, fontWeight: "900", textDecorationLine: "underline" },
+  keyboard: { color: colors.muted, fontSize: 9, fontWeight: "700", textAlign: "center" },
+
+  stateScroll: { flex: 1, minHeight: 0 },
+  stateScrollContent: { flexGrow: 1, justifyContent: "center", paddingVertical: 24 },
+  completePanel: { minHeight: 320, paddingVertical: 30, borderTopWidth: 1, borderTopColor: colors.line, justifyContent: "center" },
   completeKicker: { color: colors.coral, fontSize: 10, fontWeight: "900", letterSpacing: 1.3 },
-  completeTitle: { color: colors.ink, fontSize: 42, lineHeight: 47, fontWeight: "900", letterSpacing: -2, marginTop: 6 },
+  completeTitle: { color: colors.ink, fontSize: 40, lineHeight: 45, fontWeight: "900", letterSpacing: -1.8, marginTop: 6 },
   completeMeta: { color: colors.muted, fontSize: 12, lineHeight: 18, fontWeight: "700", marginTop: 12 },
-  sessionStats: { flexDirection: "row", alignItems: "center", gap: 28, marginTop: 28, marginBottom: 8 },
+  sessionStats: { flexDirection: "row", alignItems: "center", gap: 28, marginTop: 26, marginBottom: 8 },
   statNumber: { color: colors.ink, fontSize: 30, fontWeight: "900" },
   statLabel: { color: colors.muted, fontSize: 10, fontWeight: "800", marginTop: 2 },
   statDivider: { width: 1, height: 42, backgroundColor: colors.line },
-  completeActions: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 28 },
-  primary: { alignSelf: "flex-start", minHeight: 46, paddingHorizontal: 17, borderRadius: radii.sm, backgroundColor: colors.ink, flexDirection: "row", alignItems: "center", gap: 22 },
+  completeActions: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 26 },
+  primary: {
+    alignSelf: "flex-start",
+    minHeight: 46,
+    paddingHorizontal: 17,
+    borderRadius: radii.sm,
+    backgroundColor: colors.ink,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 22,
+  },
   primaryText: { color: "#fff", fontSize: 12, fontWeight: "900" },
   primaryArrow: { color: colors.lime, fontSize: 16, fontWeight: "900" },
-  secondary: { minHeight: 46, paddingHorizontal: 17, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
+  secondary: {
+    minHeight: 46,
+    paddingHorizontal: 17,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   secondaryText: { color: colors.ink, fontSize: 12, fontWeight: "800" },
 });
