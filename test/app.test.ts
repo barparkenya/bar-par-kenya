@@ -32,6 +32,16 @@ describe("Bar Par Kenya API", () => {
     expect(await response.json()).toMatchObject({ status: "ok", service: "bar-par-kenya-api" });
   });
 
+  it("supports HEAD monitoring on the API root and health endpoint", async () => {
+    const { app } = setup();
+    const root = await app.request("/", { method: "HEAD" });
+    const health = await app.request("/health", { method: "HEAD" });
+    expect(root.status).toBe(200);
+    expect(health.status).toBe(200);
+    expect(await root.text()).toBe("");
+    expect(await health.text()).toBe("");
+  });
+
   it("lets a guest experience the full practice loop without registering", async () => {
     const { app } = setup();
     const { token } = await guest(app);

@@ -142,16 +142,24 @@ export class PostgresStore implements Store {
   constructor(private readonly db: Database) {}
 
   async createGuest(deviceId?: string): Promise<Learner> {
-    if (deviceId) {
-      const [existing] = await this.db.select().from(learners).where(eq(learners.deviceId, deviceId)).limit(1);
-      if (existing) return toLearner(existing);
+    if (!deviceId) {
+      const [created] = await this.db.insert(learners).values({ kind: "guest" }).returning();
+      if (!created) throw new Error("Failed to create learner");
+      return toLearner(created);
     }
+
     const [created] = await this.db.insert(learners).values({
       kind: "guest",
-      ...(deviceId ? { deviceId } : {}),
-    }).returning();
-    if (!created) throw new Error("Failed to create learner");
-    return toLearner(created);
+      deviceId,
+    }).onConflictDoNothing({ target: learners.deviceId }).returning();
+
+    if (created) return toLearner(created);
+
+    const [existing] = await this.db.select().from(learners)
+      .where(eq(learners.deviceId, deviceId))
+      .limit(1);
+    if (!existing) throw new Error("Failed to create learner");
+    return toLearner(existing);
   }
 
   async getLearner(id: string): Promise<Learner | null> {

@@ -75,7 +75,7 @@ export function createApp({ store, auth, corsOrigins, mediaStorage, adminApiKey 
   app.use("*", cors({
     origin: (origin) => corsOrigins.includes(origin) ? origin : corsOrigins[0] ?? origin,
     allowHeaders: ["Authorization", "Content-Type", "X-Admin-Key", "X-Request-Id"],
-    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
     maxAge: 86400,
   }));
 
@@ -108,11 +108,18 @@ export function createApp({ store, auth, corsOrigins, mediaStorage, adminApiKey 
     await next();
   });
 
+  app.get("/", (context) => context.json({
+    status: "ok",
+    service: "bar-par-kenya-api",
+  }));
+  app.on("HEAD", "/", (context) => context.body(null, 200));
+
   app.get("/health", (context) => context.json({
     status: "ok",
     service: "bar-par-kenya-api",
     timestamp: new Date().toISOString(),
   }));
+  app.on("HEAD", "/health", (context) => context.body(null, 200));
 
   app.post("/v1/auth/guest", zValidator("json", z.object({
     deviceId: z.string().min(8).max(200).optional(),

@@ -93,6 +93,7 @@ const HAS_REVIEWED_KEY = "barpar.hasReviewed";
 const LEARNER_CACHE_KEY = "barpar.cache.learner";
 
 let token: string | null = null;
+let sessionPromise: Promise<string> | null = null;
 let offlineCache = false;
 
 const storage = {
@@ -162,20 +163,31 @@ async function setAuth(payload: { accessToken: string; learner: Learner }) {
 
 async function ensureSession() {
   if (token) return token;
-  token = await storage.get(TOKEN_KEY);
-  if (token) return token;
+  if (sessionPromise) return sessionPromise;
 
-  let deviceId = await storage.get(DEVICE_KEY);
-  if (!deviceId) {
-    deviceId = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    await storage.set(DEVICE_KEY, deviceId);
+  sessionPromise = (async () => {
+    token = await storage.get(TOKEN_KEY);
+    if (token) return token;
+
+    let deviceId = await storage.get(DEVICE_KEY);
+    if (!deviceId) {
+      deviceId = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      await storage.set(DEVICE_KEY, deviceId);
+    }
+
+    const auth = await raw("/v1/auth/guest", {
+      method: "POST",
+      body: JSON.stringify({ deviceId }),
+    }) as { accessToken: string; learner: Learner };
+    await setAuth(auth);
+    return auth.accessToken;
+  })();
+
+  try {
+    return await sessionPromise;
+  } finally {
+    sessionPromise = null;
   }
-  const auth = await raw("/v1/auth/guest", {
-    method: "POST",
-    body: JSON.stringify({ deviceId }),
-  }) as { accessToken: string; learner: Learner };
-  await setAuth(auth);
-  return auth.accessToken;
 }
 
 async function authed<T>(path: string, init: RequestInit = {}): Promise<T> {

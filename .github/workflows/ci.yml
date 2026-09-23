@@ -33,5 +33,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run build:web
-      - run: test -f dist/manifest.webmanifest && test -f dist/sw.js && test -f dist/icon.svg && test -f dist/maskable-icon.svg
+      - run: test -f dist/manifest.webmanifest && test -f dist/sw.js && test -f dist/icon.svg && test -f dist/maskable-icon.svg && test -f dist/health
       - run: grep -q "manifest.webmanifest" dist/index.html
