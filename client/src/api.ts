@@ -82,7 +82,12 @@ export type PendingReview = {
   createdAt: string;
 };
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+const CONFIGURED_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/+$/, "") || null;
+const LOCAL_API_URL = "http://localhost:3000";
+const RENDER_API_CANDIDATES = [
+  "https://bar-par-api.onrender.com",
+  "https://bar-par-kenya-api.onrender.com",
+];
 const TOKEN_KEY = "barpar.token";
 const DEVICE_KEY = "barpar.device";
 const KIND_KEY = "barpar.kind";
@@ -94,6 +99,8 @@ const LEARNER_CACHE_KEY = "barpar.cache.learner";
 
 let token: string | null = null;
 let sessionPromise: Promise<string> | null = null;
+let resolvedApiUrl: string | null = CONFIGURED_API_URL;
+let apiResolutionPromise: Promise<string> | null = null;
 let offlineCache = false;
 
 const storage = {
@@ -129,8 +136,59 @@ async function writeJson(key: string, value: unknown) {
   await storage.set(key, JSON.stringify(value));
 }
 
+function apiCandidates() {
+  if (CONFIGURED_API_URL) return [CONFIGURED_API_URL];
+
+  if (Platform.OS === "web") {
+    const hostname = globalThis.location?.hostname ?? "";
+    if (hostname === "localhost" || hostname === "127.0.0.1") return [LOCAL_API_URL];
+    if (hostname === "bar-par-kenya.onrender.com") return RENDER_API_CANDIDATES;
+  }
+
+  return [LOCAL_API_URL];
+}
+
+async function resolveApiUrl() {
+  if (resolvedApiUrl) return resolvedApiUrl;
+  if (apiResolutionPromise) return apiResolutionPromise;
+
+  apiResolutionPromise = (async () => {
+    const candidates = apiCandidates();
+    if (candidates.length === 1) return candidates[0]!;
+
+    for (const candidate of candidates) {
+      const controller = new AbortController();
+      const timeout = globalThis.setTimeout(() => controller.abort(), 6000);
+      try {
+        const response = await fetch(`${candidate}/health`, {
+          method: "HEAD",
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (response.ok) {
+          resolvedApiUrl = candidate;
+          return candidate;
+        }
+      } catch {
+        // Try the next known production endpoint.
+      } finally {
+        globalThis.clearTimeout(timeout);
+      }
+    }
+
+    throw new Error("Bar Par API is unavailable.");
+  })();
+
+  try {
+    return await apiResolutionPromise;
+  } finally {
+    apiResolutionPromise = null;
+  }
+}
+
 async function raw(path: string, init: RequestInit = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
+  const apiUrl = await resolveApiUrl();
+  const response = await fetch(`${apiUrl}${path}`, {
     ...init,
     headers: {
       ...(init.body ? { "Content-Type": "application/json" } : {}),

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bar-par-v1";
+const CACHE_VERSION = "bar-par-v2";
 const APP_SHELL = [
   "/",
   "/study",
