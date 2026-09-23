@@ -1,6 +1,6 @@
 import { Link, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { AccessibilityInfo, Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AppHeader } from "@/components/AppHeader";
 import { StatePanel } from "@/components/StatePanel";
 import { api, type CardReview, type Deck, type Learner, type PendingReview, type StudyCard } from "@/api";
@@ -38,6 +38,8 @@ export default function Study() {
   const [cards, setCards] = useState<StudyCard[]>([]);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const revealMotion = useRef(new Animated.Value(0)).current;
   const [offline, setOffline] = useState(false);
   const [pending, setPending] = useState(0);
   const [learner, setLearner] = useState<Learner | null>(null);
@@ -54,6 +56,51 @@ export default function Study() {
   const remaining = Math.max(0, cards.length - index);
   const progress = cards.length ? Math.round((index / cards.length) * 100) : 0;
   const dueTotal = useMemo(() => decks.reduce((sum, deck) => sum + deck.due + deck.newCount, 0), [decks]);
+
+  useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    revealMotion.stopAnimation();
+    Animated.timing(revealMotion, {
+      toValue: revealed ? 1 : 0,
+      duration: reduceMotion ? 0 : 280,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [revealed, reduceMotion, revealMotion]);
+
+  const animatedCardBackground = revealMotion.interpolate({
+    inputRange: [0, 0.55, 1],
+    outputRange: [colors.ink, colors.ink2, colors.lime],
+  });
+  const animatedCardScale = revealMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 0.985, 1],
+  });
+  const animatedCardTilt = revealMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ["0deg", "-1.25deg", "0deg"],
+  });
+  const frontOpacity = revealMotion.interpolate({
+    inputRange: [0, 0.42, 0.5, 1],
+    outputRange: [1, 1, 0, 0],
+  });
+  const frontTranslate = revealMotion.interpolate({
+    inputRange: [0, 0.42, 1],
+    outputRange: [0, 0, -14],
+  });
+  const backOpacity = revealMotion.interpolate({
+    inputRange: [0, 0.5, 0.58, 1],
+    outputRange: [0, 0, 1, 1],
+  });
+  const backTranslate = revealMotion.interpolate({
+    inputRange: [0, 0.58, 1],
+    outputRange: [14, 8, 0],
+  });
 
   async function refreshPending() {
     setPending(await api.pendingReviewCount());
@@ -225,13 +272,19 @@ export default function Study() {
                   accessibilityRole="button"
                   key={deck.subjectId}
                   onPress={() => void openDeck(deck)}
-                  style={({ pressed }) => [styles.deckButton, active && styles.deckButtonActive, pressed && styles.pressed]}
+                  style={({ pressed }) => [
+                    styles.deckButton,
+                    desktop && styles.deckButtonDesktop,
+                    active && styles.deckButtonActive,
+                    desktop && active && styles.deckButtonActiveDesktop,
+                    pressed && styles.pressed,
+                  ]}
                 >
                   <View style={styles.deckButtonTop}>
-                    <Text style={[styles.deckCode, active && styles.deckCodeActive]}>{deck.unitCode}</Text>
-                    <Text style={[styles.deckDue, active && styles.deckDueActive]}>{deckStatus(deck)}</Text>
+                    <Text style={[styles.deckCode, active && styles.deckCodeActive, desktop && active && styles.deckCodeActiveDesktop]}>{deck.unitCode}</Text>
+                    <Text style={[styles.deckDue, active && styles.deckDueActive, desktop && active && styles.deckDueActiveDesktop]}>{deckStatus(deck)}</Text>
                   </View>
-                  <Text numberOfLines={2} style={[styles.deckName, active && styles.deckNameActive]}>{deck.name}</Text>
+                  <Text numberOfLines={2} style={[styles.deckName, active && styles.deckNameActive, desktop && active && styles.deckNameActiveDesktop]}>{deck.name}</Text>
                 </Pressable>
               );
             })}
@@ -337,17 +390,62 @@ export default function Study() {
                 accessibilityRole="button"
                 accessibilityLabel={revealed ? "Answer shown" : "Reveal answer"}
                 onPress={() => setRevealed((value) => !value)}
-                style={({ pressed }) => [styles.card, revealed && styles.cardRevealed, pressed && styles.cardPressed]}
+                style={({ pressed }) => [styles.cardHit, pressed && styles.cardPressed]}
               >
-                <View style={styles.cardHeader}>
-                  <Text style={[styles.cardLabel, revealed && styles.cardLabelDark]}>{revealed ? "ANSWER" : "RECALL"}</Text>
-                  <Text style={[styles.cardPosition, revealed && styles.cardLabelDark]}>{String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}</Text>
-                </View>
-                <View style={styles.cardBody}>
-                  <Text style={[styles.topic, revealed && styles.topicDark]}>{card.topicName}</Text>
-                  <Text style={[styles.cardText, revealed && styles.cardTextDark]}>{revealed ? card.back : card.front}</Text>
-                  {revealed && card.source ? <Text style={styles.source}>{card.source}</Text> : null}
-                </View>
+                <Animated.View
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: animatedCardBackground,
+                      transform: [
+                        { perspective: 1200 },
+                        { scale: animatedCardScale },
+                        { rotateX: animatedCardTilt },
+                      ],
+                    },
+                  ]}
+                >
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.cardFace,
+                      {
+                        opacity: frontOpacity,
+                        transform: [{ translateY: frontTranslate }],
+                      },
+                    ]}
+                  >
+                    <View style={styles.cardHeader}>
+                      <Text style={styles.cardLabel}>RECALL</Text>
+                      <Text style={styles.cardPosition}>{String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}</Text>
+                    </View>
+                    <View style={styles.cardBody}>
+                      <Text style={styles.topic}>{card.topicName}</Text>
+                      <Text style={styles.cardText}>{card.front}</Text>
+                    </View>
+                  </Animated.View>
+
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.cardFace,
+                      {
+                        opacity: backOpacity,
+                        transform: [{ translateY: backTranslate }],
+                      },
+                    ]}
+                  >
+                    <View style={styles.cardHeader}>
+                      <Text style={[styles.cardLabel, styles.cardLabelDark]}>ANSWER</Text>
+                      <Text style={[styles.cardPosition, styles.cardLabelDark]}>{String(index + 1).padStart(2, "0")} / {String(cards.length).padStart(2, "0")}</Text>
+                    </View>
+                    <View style={styles.cardBody}>
+                      <Text style={[styles.topic, styles.topicDark]}>{card.topicName}</Text>
+                      <Text style={[styles.cardText, styles.cardTextDark]}>{card.back}</Text>
+                      {card.source ? <Text style={styles.source}>{card.source}</Text> : null}
+                    </View>
+                  </Animated.View>
+                </Animated.View>
               </Pressable>
 
               {!revealed ? (
@@ -391,21 +489,26 @@ const styles = StyleSheet.create({
   body: { flexGrow: 1, width: "100%", maxWidth: 1320, alignSelf: "center", padding: 16, paddingBottom: 104, gap: 16 },
   bodyDesktop: { flexDirection: "row", padding: 28, gap: 22 },
   deckRail: { gap: 12 },
-  deckRailDesktop: { width: 270, flexShrink: 0 },
+  deckRailDesktop: { width: 252, flexShrink: 0, paddingRight: 18, borderRightWidth: 1, borderRightColor: colors.line },
   railHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 },
   railLabel: { color: colors.muted, fontSize: 10, fontWeight: "900", letterSpacing: 1.3 },
   railTotal: { color: colors.ink, fontSize: 11, fontWeight: "900" },
   deckList: { gap: 7 },
   deckListMobile: { paddingRight: 16 },
   deckButton: { minWidth: 210, padding: 14, borderRadius: radii.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
+  deckButtonDesktop: { minWidth: 0, paddingHorizontal: 4, paddingVertical: 13, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderBottomColor: colors.line, backgroundColor: "transparent" },
   deckButtonActive: { backgroundColor: colors.ink, borderColor: colors.ink },
+  deckButtonActiveDesktop: { backgroundColor: "transparent", borderColor: colors.line, borderLeftWidth: 3, borderLeftColor: colors.coral, paddingLeft: 11 },
   deckButtonTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   deckCode: { color: colors.coral, fontSize: 9, fontWeight: "900", letterSpacing: 1 },
   deckCodeActive: { color: colors.lime },
+  deckCodeActiveDesktop: { color: colors.coral },
   deckDue: { color: colors.muted, fontSize: 9, fontWeight: "800" },
   deckDueActive: { color: "#AFC0BA" },
+  deckDueActiveDesktop: { color: colors.ink2 },
   deckName: { color: colors.ink, fontSize: 14, lineHeight: 18, fontWeight: "800", marginTop: 7 },
   deckNameActive: { color: "#fff" },
+  deckNameActiveDesktop: { color: colors.ink },
   pressed: { opacity: 0.66 },
   stage: { flex: 1, minWidth: 0, maxWidth: 800, alignSelf: "center", width: "100%" },
   stageTop: { minHeight: 68, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14 },
@@ -421,9 +524,10 @@ const styles = StyleSheet.create({
   syncText: { color: colors.muted, fontSize: 10, fontWeight: "800" },
   progressTrack: { height: 3, backgroundColor: colors.line, borderRadius: 2, marginBottom: 18, overflow: "hidden" },
   progressFill: { height: 3, backgroundColor: colors.coral },
-  card: { minHeight: 410, padding: 28, borderRadius: radii.lg, backgroundColor: colors.ink, justifyContent: "space-between", ...shadow },
-  cardRevealed: { backgroundColor: colors.lime },
-  cardPressed: { transform: [{ scale: 0.997 }] },
+  cardHit: { minHeight: 410, borderRadius: radii.lg },
+  card: { minHeight: 410, borderRadius: radii.lg, overflow: "hidden", ...shadow },
+  cardFace: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, padding: 28, justifyContent: "space-between" },
+  cardPressed: { opacity: 0.96 },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   cardLabel: { color: colors.lime, fontSize: 9, fontWeight: "900", letterSpacing: 1.4 },
   cardLabelDark: { color: colors.ink2 },

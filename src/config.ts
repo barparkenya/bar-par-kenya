@@ -20,7 +20,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.parse(source);
   const configuredOrigins = parsed.CORS_ORIGINS
     ?.split(",")
-    .map((value) => value.trim())
+    .map((value) => value.trim().replace(/\/+$/, ""))
     .filter(Boolean) ?? [];
   const defaultOrigins = parsed.NODE_ENV === "production"
     ? ["https://bar-par-kenya.onrender.com"]
